@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 外部との通信をすべて禁止する設定（入力データがどこにも送信されないことを保証） -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>段階希釈プランナー</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1f2328;
+    --muted: #5f6670;
+    --border: #d0d5dc;
+    --accent: #1a6fd1;
+    --accent-text: #ffffff;
+    --ok-bg: #eef6ee;
+    --ok-border: #8cc08c;
+    --err-bg: #fdeeee;
+    --err-border: #e08b8b;
+    --err-text: #a12020;
+    --step-bg: rgba(0, 0, 0, 0.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card: #20242a;
+      --text: #e8eaed;
+      --muted: #a0a7b0;
+      --border: #3a4049;
+      --accent: #5aa2f0;
+      --accent-text: #0d1117;
+      --ok-bg: #1d2e1f;
+      --ok-border: #3f7a45;
+      --err-bg: #3a1e1e;
+      --err-border: #9a4545;
+      --err-text: #ffb3b3;
+      --step-bg: rgba(255, 255, 255, 0.05);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    line-height: 1.6;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 16px; }
+
+  /* タブ */
+  .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); }
+  .tab {
+    flex: 1;
+    padding: 12px 8px;
+    font-size: 1rem;
+    border: none;
+    border-radius: 8px 8px 0 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-text); font-weight: bold; }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    padding: 16px;
+  }
+  .hint { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+
+  /* 入力欄 */
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-weight: bold; margin-bottom: 4px; }
+  .field label .optional { font-weight: normal; color: var(--muted); font-size: 0.85rem; }
+  .input-row { display: flex; gap: 8px; }
+  input, select {
+    font-size: 16px; /* スマホで入力時に画面が拡大されないよう16px以上にする */
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  input { flex: 1; min-width: 0; width: 100%; }
+  select { flex: 0 0 9.5em; }
+  .unit-fixed { flex: 0 0 9.5em; align-self: center; color: var(--muted); }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .divider { border: none; border-top: 1px dashed var(--border); margin: 4px 0 14px; }
+
+  button { font-family: inherit; }
+  .buttons { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .buttons button {
+    flex: 1;
+    padding: 12px;
+    font-size: 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .btn-calc { background: var(--accent); color: var(--accent-text); border: none; font-weight: bold; }
+  .btn-clear, .btn-sub { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .btn-danger { background: transparent; color: var(--err-text); border: 1px solid var(--err-border); }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  /* 結果 */
+  .result { margin-top: 18px; padding: 14px; border-radius: 8px; border: 1px solid; }
+  .result[hidden] { display: none; }
+  .result.ok { background: var(--ok-bg); border-color: var(--ok-border); }
+  .result.error { background: var(--err-bg); border-color: var(--err-border); color: var(--err-text); }
+  .result h2 { font-size: 1rem; margin: 0 0 8px; }
+  .result ul { margin: 0; padding-left: 1.2em; }
+  .result-item { display: flex; flex-wrap: wrap; gap: 0 12px; align-items: baseline; margin: 4px 0; }
+  .result-item .label { color: var(--muted); }
+  .result-item .value { font-size: 1.3rem; font-weight: bold; }
+  .result .note { margin: 8px 0 0; font-size: 0.95rem; }
+
+  /* 計算過程 */
+  .steps { margin-top: 14px; padding: 12px; border-radius: 6px; background: var(--step-bg); font-size: 0.92rem; }
+  .steps h3 { font-size: 0.95rem; margin: 0 0 6px; }
+  .steps ol { margin: 0; padding-left: 1.4em; }
+  .steps ol > li { margin-bottom: 6px; }
+  .steps ul { padding-left: 1.1em; margin: 2px 0 0; }
+  .steps .substituted { padding-left: 1em; overflow-wrap: anywhere; }
+  .steps li { overflow-wrap: anywhere; }
+
+  .add-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+  .btn-add {
+    padding: 10px 14px;
+    font-size: 1rem;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    cursor: pointer;
+  }
+  .add-hint { font-size: 0.85rem; color: var(--muted); }
+
+  /* ワークシート */
+  .worksheet {
+    margin-top: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .worksheet h2 { font-size: 1.15rem; margin: 0 0 4px; }
+  .ws-count { color: var(--muted); font-size: 0.9rem; margin: 0 0 10px; }
+  .ws-warning { color: var(--err-text); background: var(--err-bg); border: 1px solid var(--err-border); border-radius: 6px; padding: 8px 10px; font-size: 0.9rem; }
+  .ws-warning[hidden], .ws-empty[hidden], .table-wrap[hidden] { display: none; }
+  .ws-empty { color: var(--muted); font-size: 0.95rem; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 0.85rem; }
+  th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; white-space: pre-line; }
+  th { background: var(--step-bg); white-space: nowrap; }
+  td.num { white-space: nowrap; }
+  .btn-row-delete {
+    padding: 4px 8px;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    border: 1px solid var(--err-border);
+    background: transparent;
+    color: var(--err-text);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .notice {
+    margin: 0 0 16px;
+    padding: 10px 14px;
+    border: 1px solid var(--err-border);
+    border-radius: 8px;
+    background: var(--err-bg);
+    font-size: 0.9rem;
+  }
+  .notice ul { margin: 0; padding-left: 1.2em; }
+  .notice strong { color: var(--err-text); }
+
+  footer { max-width: 640px; margin: 0 auto; padding: 8px 16px 32px; font-size: 0.9rem; color: var(--muted); }
+  footer .caution { color: var(--text); font-weight: bold; }
+
+  .print-only { display: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (max-width: 420px) {
+    select, .unit-fixed { flex-basis: 8em; }
+  }
+
+
+  .notice { margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--err-border); border-radius: 8px; background: var(--err-bg); font-size: 0.9rem; }
+  .notice ul { margin: 0; padding-left: 1.2em; }
+  .notice strong { color: var(--err-text); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .radio-row { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .radio-row label { font-weight: normal; display: inline-flex; gap: 6px; align-items: center; }
+  .check { display: inline-flex; gap: 8px; align-items: center; font-weight: normal; }
+  input[type=radio], input[type=checkbox] { width: auto; flex: none; }
+  textarea { width: 100%; min-height: 180px; font-size: 16px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-family: ui-monospace, Menlo, monospace; }
+  .warn { color: var(--err-text); background: var(--err-bg); border: 1px solid var(--err-border); border-radius: 6px; padding: 8px 10px; font-size: 0.9rem; margin: 10px 0; }
+  .out-table { min-width: 0; }
+  .out-table td, .out-table th { white-space: nowrap; }
+  .out-table td.num, .out-table th.num { text-align: right; }
+  .result h3 { font-size: 0.95rem; margin: 14px 0 6px; }
+  .procedure { margin: 6px 0 0; padding-left: 1.4em; }
+  .procedure li { margin-bottom: 4px; }
+  .muted { color: var(--muted); font-size: 0.85rem; }
+  .row-warn td { color: var(--err-text); font-weight: bold; }
+
+  @media print {
+    @page { size: A4; margin: 12mm; }
+    :root { --bg: #fff; --card: #fff; --text: #000; --muted: #444; --border: #888; --step-bg: #f2f2f2; --ok-bg: #fff; --err-bg: #fff; }
+    body { background: #fff; color: #000; font-size: 10pt; }
+    main { max-width: none; padding: 0; }
+    .no-print, footer { display: none !important; }
+    .card, .result { border: none; padding: 0; }
+    .table-wrap { overflow: visible; border: none; }
+    th, td { border: 1px solid #888; }
+    .steps { background: none; border: 1px solid #bbb; }
+    .print-only { display: block; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>段階希釈プランナー</h1>
+  <div class="notice no-print" role="note">
+    <ul>
+      <li><strong>このツールは実験の補助です。計算結果は必ずご自身で検算してください。</strong></li>
+      <li>入力した値は外部に送信されません（このページの中だけで計算します）。</li>
+      <li>このツールは更新・個別サポートを行いません。</li>
+    </ul>
+  </div>
+  <div class="print-only" style="display:none"><p id="print-time"></p></div>
+
+  <section class="card no-print">
+    <form id="form" novalidate>
+      <p class="hint">原液から、公比またはハーフログで段階的に薄めるときの、各点の液量と手順を出します。「おまかせ」では、必要量を満たしつつ、移す量と溶媒がなるべくきりのいい数字になる作り方を自動で選びます。</p>
+      <div class="field">
+        <label for="memo">試料名・メモ <span class="optional">（任意）</span></label>
+        <input id="memo" type="text" maxlength="200" autocomplete="off" placeholder="例：検量線 STD">
+      </div>
+      <hr class="divider">
+      <div class="field">
+        <label for="c0">原液の濃度</label>
+        <div class="input-row">
+          <input id="c0" type="text" inputmode="decimal" autocomplete="off">
+          <select id="c0-unit" aria-label="原液の濃度の単位" data-units="conc" data-default="mM"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="cmax">最高濃度（1点目）</label>
+        <div class="input-row">
+          <input id="cmax" type="text" inputmode="decimal" autocomplete="off">
+          <select id="cmax-unit" aria-label="最高濃度の単位" data-units="conc" data-default="µM"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label>希釈の方法</label>
+        <div class="radio-row" role="radiogroup">
+          <label><input type="radio" name="mode" value="ratio"> 公比（一定の倍率）</label>
+          <label><input type="radio" name="mode" value="halflogRound" checked> ハーフログ（10・3・1・0.3…）</label>
+          <label><input type="radio" name="mode" value="halflog"> ハーフログ（√10倍ずつ・正確な値）</label>
+        </div>
+      </div>
+      <div class="field" id="ratio-field">
+        <label for="ratio">公比（何倍ずつ薄めるか）</label>
+        <div class="input-row">
+          <input id="ratio" type="text" inputmode="decimal" autocomplete="off" value="2">
+          <span class="unit-fixed">倍</span>
+        </div>
+      </div>
+      <div class="field">
+        <label for="points">点数</label>
+        <div class="input-row">
+          <input id="points" type="text" inputmode="numeric" autocomplete="off" value="8">
+          <span class="unit-fixed">点（2〜24）</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>液量の決め方</label>
+        <div class="radio-row" role="radiogroup">
+          <label><input type="radio" name="volmode" value="auto" checked> おまかせ（必要量から、きりのいい量を自動で選ぶ）</label>
+          <label><input type="radio" name="volmode" value="fixed"> 移す量を指定する（例：30 µL ずつ）</label>
+          <label><input type="radio" name="volmode" value="equal"> 各点に同じ量を残す</label>
+        </div>
+      </div>
+      <div class="field" id="transfer-field">
+        <label for="transfer">前の点から移す量</label>
+        <div class="input-row">
+          <input id="transfer" type="text" inputmode="decimal" autocomplete="off" value="30">
+          <select id="transfer-unit" aria-label="移す量の単位" data-units="volume" data-default="µL"></select>
+        </div>
+        <p class="muted">溶媒の量は「移す量 ×（希釈倍率 − 1）」で決まります。例：30 µL を移すとき、3倍なら溶媒 60 µL、10/3倍なら 70 µL。</p>
+      </div>
+      <div class="field">
+        <label for="need">1点あたりの必要量 <span class="optional" id="need-optional"></span></label>
+        <div class="input-row">
+          <input id="need" type="text" inputmode="decimal" autocomplete="off">
+          <select id="need-unit" aria-label="必要量の単位" data-units="volume" data-default="µL"></select>
+        </div>
+      </div>
+      <div class="field" id="loss-field">
+        <label for="loss">余裕分</label>
+        <div class="input-row">
+          <input id="loss" type="text" inputmode="decimal" autocomplete="off" value="10">
+          <span class="unit-fixed">%</span>
+        </div>
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="blank"> ブランク（濃度0・溶媒のみ）も作る</label>
+      </div>
+      <div class="buttons">
+        <button type="submit" class="btn-calc">計算する</button>
+        <button type="button" class="btn-clear" id="btn-clear">クリア</button>
+      </div>
+    </form>
+  </section>
+
+  <div class="result" id="result" aria-live="polite" hidden></div>
+  <div class="buttons no-print">
+    <button type="button" class="btn-sub" id="btn-csv" disabled>CSVで保存</button>
+    <button type="button" class="btn-sub" id="btn-print" disabled>印刷</button>
+  </div>
+</main>
+<footer>
+  <p class="caution">⚠ 計算結果は必ずご自身で確認してください。</p>
+  <p>入力したデータはこの端末のブラウザ内だけで計算され、どこにも送信されません。</p>
+  <p id="footer-version"></p>
+</footer>
+
+<script>
+'use strict';
+// ===== 入力の読み取り =====
+const NUMBER_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
+// 全角の数字・記号を半角にそろえる（「１０．５」なども入力できるように）
+function toHalfWidth(text) {
+  return text
+    .replace(/[０-９．＋－ｅＥ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/−/g, '-');
+}
+
+// 入力欄の文字を読み取り、{ blank: true } / { value: 数値 } / { error: メッセージ } のどれかを返す
+function parseNumber(raw, label) {
+  const text = toHalfWidth(String(raw)).trim();
+  if (text === '') return { blank: true };
+  if (!NUMBER_PATTERN.test(text)) {
+    return { error: `${label}には数字を入力してください（入力された値：「${String(raw).trim()}」）。` };
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value)) return { error: `${label}の数字が大きすぎます。` };
+  if (value <= 0) return { error: `${label}には 0 より大きい数字を入力してください。` };
+  return { value };
+}
+
+function blankMessage(names, count) {
+  if (count === 0) return `${names}のうち、計算したい項目を1つ空欄にしてください。`;
+  return `${names}のうち、空欄は1つだけにしてください（いま ${count} 個が空欄です）。`;
+}
+
+// ===== 数字の表示 =====
+const SUPERSCRIPT = { '-': '⁻', '+': '', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+
+// 指数表記の文字（"1.234e-5"）を「1.234 × 10⁻⁵」の形にする
+function powerOfTen(exponential) {
+  const [mantissa, exponent] = exponential.split('e');
+  const sup = exponent.split('').map(c => SUPERSCRIPT[c]).join('');
+  return `${Number(mantissa)} × 10${sup}`;
+}
+
+// 結果用：有効数字4桁に丸めて表示用の文字にする（0.30000000000000004 → 0.3）
+function formatNumber(x) {
+  const rounded = Number(x.toPrecision(4));
+  const abs = Math.abs(rounded);
+  if (abs !== 0 && (abs < 1e-4 || abs >= 1e7)) return powerOfTen(rounded.toExponential(3));
+  return rounded.toLocaleString('ja-JP', { maximumSignificantDigits: 4 });
+}
+
+// 計算過程用：浮動小数点の誤差だけを取り除き、桁はなるべく残す（有効数字12桁）
+function formatFull(x) {
+  const r = Number(x.toPrecision(12));
+  const abs = Math.abs(r);
+  if (abs !== 0 && (abs < 1e-6 || abs >= 1e9)) return powerOfTen(r.toExponential());
+  return String(r);
+}
+
+// 「数値 単位」の文字を作る（計算過程用）
+const q = (value, unit) => `${formatFull(value)} ${unit}`;
+
+// 値がちょうど読みやすくなる単位を選ぶ（0.005495 M → 5.495 mM）
+function pickUnit(baseValue, candidates) {
+  for (const [unit, factor] of candidates) {
+    if (baseValue / factor >= 1) return [baseValue / factor, unit];
+  }
+  const [unit, factor] = candidates[candidates.length - 1];
+  return [baseValue / factor, unit];
+}
+
+
+
+const TOOL_NAME = '段階希釈プランナー';
+const TOOL_VERSION = 'v1.3';
+
+// ===== 単位の定義（基準：液量=L、質量濃度=g/L、モル濃度=mol/L） =====
+const VOLUME_UNITS = { 'µL': 1e-6, 'mL': 1e-3 };
+const CONC_UNITS = {
+  'pg/mL': { type: 'mass', factor: 1e-9 },
+  'ng/mL': { type: 'mass', factor: 1e-6 },
+  'µg/mL': { type: 'mass', factor: 1e-3 },
+  'mg/mL': { type: 'mass', factor: 1 },
+  'pM': { type: 'molar', factor: 1e-12 },
+  'nM': { type: 'molar', factor: 1e-9 },
+  'µM': { type: 'molar', factor: 1e-6 },
+  'mM': { type: 'molar', factor: 1e-3 },
+  'M': { type: 'molar', factor: 1 },
+};
+const MIN_PIPETTE_UL = 2; // これより少ない量は「量りにくい」と警告する
+const MODE_LABELS = {
+  ratio: '公比（一定の倍率）',
+  halflog: 'ハーフログ（√10倍ずつ・正確な値）',
+  halflogRound: 'ハーフログ（10・3・1・0.3…のきりのいい値）',
+};
+
+// 0 も入力できる数字の読み取り（余裕分の % 用）
+function parseNonNegative(raw, label) {
+  const text = toHalfWidth(String(raw)).trim();
+  if (text === '') return { blank: true };
+  if (!NUMBER_PATTERN.test(text)) return { error: `${label}には数字を入力してください（入力された値：「${String(raw).trim()}」）。` };
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < 0) return { error: `${label}には 0 以上の数字を入力してください。` };
+  return { value };
+}
+
+// 液量を読みやすい単位で表す（1 mL 未満は µL、それ以上は mL）
+function volumeText(liters) {
+  if (liters < 1e-3) return `${formatNumber(liters / 1e-6)} µL`;
+  return `${formatNumber(liters / 1e-3)} mL`;
+}
+
+// 最高濃度の数字が「1…」か「3…」で始まるかを調べる（きりのいいハーフログ用）
+function leadingDigit(value) {
+  const exponent = Math.floor(Math.log10(value) + 1e-12);
+  const mantissa = value / Math.pow(10, exponent);
+  if (Math.abs(mantissa - 1) < 1e-9) return { start: 1, exponent };
+  if (Math.abs(mantissa - 3) < 1e-9) return { start: 3, exponent };
+  return null;
+}
+
+// 各点の濃度（入力した単位のまま）と、隣の点との希釈倍率を作る
+function buildConcentrations(cmax, mode, ratio, points) {
+  const concs = [];
+  if (mode === 'ratio' || mode === 'halflog') {
+    const r = mode === 'ratio' ? ratio : Math.sqrt(10);
+    for (let i = 0; i < points; i++) concs.push(cmax / Math.pow(r, i));
+  } else {
+    const lead = leadingDigit(cmax);
+    if (!lead) return { error: '「きりのいい値」のハーフログは、最高濃度が 1 か 3 で始まる数字（例：10、30、3、100）のときに使えます。' };
+    // 1始まり：1, 0.3, 0.1, 0.03 …　3始まり：3, 1, 0.3, 0.1 …
+    for (let i = 0; i < points; i++) {
+      let v;
+      if (lead.start === 1) v = i % 2 === 0 ? cmax * Math.pow(10, -i / 2) : cmax * 0.3 * Math.pow(10, -(i - 1) / 2);
+      else v = i % 2 === 0 ? cmax * Math.pow(10, -i / 2) : (cmax / 3) * Math.pow(10, -(i - 1) / 2);
+      concs.push(Number(v.toPrecision(12)));
+    }
+  }
+  const ratios = [];
+  for (let i = 0; i < points - 1; i++) ratios.push(concs[i] / concs[i + 1]);
+  return { concs, ratios };
+}
+
+
+// ===== きりのいい量を選ぶ =====
+// µL の値のきりのよさ：10の倍数=3、5の倍数=2、整数=1、それ以外=0
+function niceLevel(ul) {
+  const r = Math.round(ul);
+  if (Math.abs(ul - r) > 1e-6) return 0;
+  if (r % 10 === 0) return 3;
+  if (r % 5 === 0) return 2;
+  return 1;
+}
+const TRANSFER_CANDIDATES_UL = [5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90, 100, 120, 125, 150, 200, 250, 300, 400, 500, 600, 750, 800, 1000];
+// 必要量を満たし、溶媒がなるべくきりのいい数字になる「移す量」を選ぶ。よい順に並べて返す
+function chooseTransfer(ratios, needL) {
+  const needUl = needL / 1e-6;
+  const list = [];
+  for (const t of TRANSFER_CANDIDATES_UL) {
+    const dil = ratios.map(r => t * (r - 1));
+    const keepMin = Math.min(...dil);
+    if (keepMin < needUl * (1 - 1e-9)) continue; // 残る量が足りない
+    const nice = Math.min(...dil.map(niceLevel));
+    const waste = dil.reduce((s, d) => s + (d - needUl), 0) / (needUl * dil.length) * 100; // 余る量（%）
+    const score = (3 - nice) * 1000 + (t < 10 ? 300 : 0) + waste;
+    list.push({ transferUl: t, diluentsUl: dil, nice, waste, score });
+  }
+  list.sort((a, b) => a.score - b.score);
+  return list;
+}
+// 1点目：原液の量と溶媒の量がきりのいい数字になるよう、全量を少しだけ増やして探す
+function chooseFirstTotal(minTotalL, ratioToStock) {
+  const minUl = minTotalL / 1e-6;
+  let best = { totalUl: minUl, score: Infinity };
+  for (let t = Math.ceil(minUl - 1e-9); t <= minUl * 1.5 + 1e-9; t++) {
+    const stock = t * ratioToStock;
+    if (stock < MIN_PIPETTE_UL) continue;
+    const score = (3 - niceLevel(stock)) * 100 + (3 - niceLevel(t - stock)) * 10 + (t - minUl) / minUl * 50;
+    if (score < best.score) best = { totalUl: t, score };
+  }
+  return best.totalUl * 1e-6;
+}
+
+// ===== 計算本体 =====
+// 液量の決め方は2通り
+//   fixed：前の点から移す量を固定し（例：30 µL）、溶媒の量を希釈倍率から決める（溶媒 = 移す量 ×（倍率 − 1））
+//   equal：最後の点から逆算し、すべての点に同じ量が残るようにする
+const VOL_MODE_LABELS = { auto: 'おまかせ（きりのいい量を自動で選ぶ）', fixed: '移す量を指定する', equal: '各点に同じ量を残す' };
+
+// 成功：{ ok: true, rows, blankRow, warnings, procedure, steps, summary }／失敗：{ ok: false, errors }
+function planDilution(input) {
+  const errors = [];
+  const volMode = ['auto', 'fixed', 'equal'].includes(input.volMode) ? input.volMode : 'auto';
+  const f = {
+    c0: parseNumber(input.c0, '原液の濃度'),
+    cmax: parseNumber(input.cmax, '最高濃度（1点目）'),
+    need: parseNumber(input.need, '1点あたりの必要量'),
+    loss: parseNonNegative(input.loss, '余裕分'),
+    transfer: parseNumber(input.transfer, '移す量'),
+  };
+  const used = volMode === 'fixed' ? ['c0', 'cmax', 'need', 'transfer'] : volMode === 'auto' ? ['c0', 'cmax', 'need'] : ['c0', 'cmax', 'need', 'loss'];
+  for (const k of used) if (f[k].error) errors.push(f[k].error);
+  const required = [['c0', '原液の濃度'], ['cmax', '最高濃度（1点目）']];
+  if (volMode === 'fixed') required.push(['transfer', '移す量']);
+  else required.push(['need', '1点あたりの必要量']);
+  for (const [k, label] of required) if (f[k].blank) errors.push(`${label}を入力してください。`);
+  const loss = f.loss.blank || f.loss.error ? 0 : f.loss.value;
+  if (volMode === 'equal' && !f.loss.error && loss > 100) errors.push('余裕分は 100% 以下で入力してください。');
+
+  const pointsText = toHalfWidth(String(input.points)).trim();
+  const points = Number(pointsText);
+  if (!/^\d+$/.test(pointsText) || points < 2 || points > 24) errors.push('点数は 2〜24 の整数で入力してください。');
+
+  let ratio;
+  if (input.mode === 'ratio') {
+    const r = parseNumber(input.ratio, '公比');
+    if (r.error) errors.push(r.error);
+    else if (r.blank) errors.push('公比を入力してください（例：2、3、10）。');
+    else if (r.value <= 1) errors.push('公比は 1 より大きい数字にしてください（例：2 なら 2倍ずつ薄めます）。');
+    else ratio = r.value;
+  }
+
+  const c0Unit = CONC_UNITS[input.c0Unit];
+  const cmaxUnit = CONC_UNITS[input.cmaxUnit];
+  if (c0Unit.type !== cmaxUnit.type) {
+    errors.push('原液と最高濃度の単位の種類がそろっていません。質量濃度（µg/mL など）どうし、またはモル濃度（µM など）どうしにしてください。');
+  }
+  if (errors.length) return { ok: false, errors };
+
+  const c0Base = f.c0.value * c0Unit.factor;
+  const cmaxBase = f.cmax.value * cmaxUnit.factor;
+  if (cmaxBase > c0Base * (1 + 1e-9)) {
+    return { ok: false, errors: ['最高濃度が原液の濃度より高くなっています。希釈では濃度を上げられないので、数値と単位を確認してください。'] };
+  }
+
+  const built = buildConcentrations(f.cmax.value, input.mode, ratio, points);
+  if (built.error) return { ok: false, errors: [built.error] };
+  const { concs, ratios } = built;
+
+  const needL = f.need.blank || f.need.error ? null : f.need.value * VOLUME_UNITS[input.needUnit];
+  const total = new Array(points);
+  const transfer = new Array(points).fill(0); // i番目から i+1番目へ移す量
+  const keep = new Array(points);             // 各点に残る量（実験に使える量）
+  const fsteps = [];
+  let T = null, keepL = null, candidates = null;
+  const autoWarnings = [];
+  if (volMode === 'auto') {
+    candidates = chooseTransfer(ratios, needL);
+    if (!candidates.length) return { ok: false, errors: [`必要量 ${volumeText(needL)} を満たす移す量が見つかりませんでした（最大 1 mL まで探しました）。必要量を減らすか、「各点に同じ量を残す」を選んでください。`] };
+    T = candidates[0].transferUl * 1e-6;
+    if (candidates[0].nice === 0) autoWarnings.push('この希釈倍率では、溶媒をきりのいい数字にできませんでした（√10倍など）。ハーフログなら「10・3・1・0.3…」を選ぶと、きりのいい量になります。');
+    fsteps.push({ formula: '移す量の選び方', substituted: `候補（${TRANSFER_CANDIDATES_UL.join('、')} µL）のうち、①各点に残る量が必要量以上、②溶媒が10 µL単位＞5 µL単位＞1 µL単位、③余る量が少ない、の順で一番よいもの → ${candidates[0].transferUl} µL` });
+  }
+
+  if (volMode === 'fixed' || volMode === 'auto') {
+    if (volMode === 'fixed') T = f.transfer.value * VOLUME_UNITS[input.transferUnit];
+    for (let i = 0; i < points - 1; i++) transfer[i] = T;
+    // 2点目以降：溶媒 = 移す量 ×（倍率 − 1）、全量 = 移す量 + 溶媒
+    for (let i = 1; i < points; i++) total[i] = T * ratios[i - 1];
+    // 残る量：途中の点は 全量 − 移す量、最後の点は全量がそのまま残る
+    for (let i = 1; i < points; i++) keep[i] = i < points - 1 ? total[i] - T : total[i];
+    // 1点目：次へ移す量 ＋ 2点目以降の（全量 − 移す量）の最大
+    const maxKeep = Math.max(...total.slice(1).map(t => t - T));
+    const minFirst = T + maxKeep;
+    total[0] = chooseFirstTotal(minFirst, cmaxBase / c0Base);
+    keep[0] = total[0] - T;
+    fsteps.push({ formula: '2点目以降の溶媒 = 移す量 × (希釈倍率 − 1)', substituted: ratios.map((r, i) => `No.${i + 2}：${q(T, 'L')} × (${formatFull(r)} − 1) = ${q(T * (r - 1), 'L')}`).join('　') });
+    fsteps.push({ formula: '2点目以降の全量 = 移す量 + 溶媒', substituted: ratios.map((r, i) => `No.${i + 2}：${q(total[i + 1], 'L')}`).join('　') });
+    fsteps.push({ formula: '各点に残る量 = 全量 − 次へ移す量（最後の点は全量）', substituted: keep.slice(1).map((k, i) => `No.${i + 2}：${q(k, 'L')}`).join('　') });
+    fsteps.push({ formula: '1点目の全量 = 移す量 + 2点目以降の（全量 − 移す量）の最大（原液と溶媒がきりのいい量になるよう、最大1.5倍まで増やして調整）', substituted: `= ${q(T, 'L')} + ${q(maxKeep, 'L')} = ${q(minFirst, 'L')} → 採用 ${q(total[0], 'L')}` });
+  } else {
+    keepL = needL * (1 + loss / 100);
+    total[points - 1] = keepL;
+    for (let i = points - 2; i >= 0; i--) {
+      transfer[i] = total[i + 1] / ratios[i];
+      total[i] = keepL + transfer[i];
+    }
+    keep.fill(keepL);
+    fsteps.push({ formula: '各点に残す量 = 必要量 × (1 + 余裕分/100)', substituted: `= ${q(needL, 'L')} × ${formatFull(1 + loss / 100)} = ${q(keepL, 'L')}` });
+    fsteps.push({ formula: `No.${points}（最後の点）の全量 = 残す量`, substituted: `= ${q(total[points - 1], 'L')}` });
+    for (let i = points - 2; i >= 0; i--) {
+      fsteps.push({ formula: `No.${i + 1} から No.${i + 2} へ移す量 = No.${i + 2} の全量 ÷ 希釈倍率`, substituted: `= ${q(total[i + 1], 'L')} ÷ ${formatFull(ratios[i])} = ${q(transfer[i], 'L')}` });
+      fsteps.push({ formula: `No.${i + 1} の全量 = 残す量 + 移す量`, substituted: `= ${q(keepL, 'L')} + ${q(transfer[i], 'L')} = ${q(total[i], 'L')}` });
+    }
+  }
+  const stockL = total[0] * cmaxBase / c0Base;
+  const take = [stockL, ...transfer.slice(0, points - 1)];
+  const diluent = total.map((t, i) => t - take[i]);
+
+  const unitName = input.cmaxUnit;
+  const isMolar = cmaxUnit.type === 'molar';
+  const rows = concs.map((c, i) => ({
+    no: i + 1,
+    conc: c,
+    log: isMolar ? Math.log10(c * cmaxUnit.factor) : Math.log10(c),
+    from: i === 0 ? '原液' : `No.${i}`,
+    take: take[i],
+    diluent: diluent[i],
+    total: total[i],
+    transferOut: i < points - 1 ? transfer[i] : 0,
+    keep: keep[i],
+    warn: take[i] / 1e-6 < MIN_PIPETTE_UL,
+    short: needL !== null && keep[i] < needL * (1 - 1e-9),
+  }));
+  const blankVol = volMode === 'equal' ? keepL : Math.max(...keep.slice(0, Math.max(points - 1, 1)));
+  const blankRow = input.blank ? { diluent: blankVol } : null;
+
+  const warnings = [...autoWarnings];
+  const small = rows.filter(r => r.warn);
+  if (small.length) {
+    let tip = '量を増やすか、原液を先に薄めてから使うことを検討してください。';
+    if (rows[0].warn) {
+      // 原液を先に 10倍・100倍… に薄めたとき、No.1 に入れる量が量りやすくなる倍率を探す
+      for (const F of [10, 100, 1000, 10000]) {
+        const s2 = total[0] * cmaxBase / (c0Base / F);
+        if (s2 / 1e-6 >= MIN_PIPETTE_UL) {
+          const preStock = 10e-6, preTotal = preStock * F;
+          tip = `原液を先に ${F} 倍に薄めると（例：原液 ${volumeText(preStock)} ＋ 溶媒 ${volumeText(preTotal - preStock)}）、No.1 には薄めた液 ${volumeText(s2)} ＋ 溶媒 ${volumeText(total[0] - s2)} を入れればよくなります（原液の濃度を ${formatNumber(f.c0.value / F)} ${input.c0Unit} にして計算し直すと、手順に反映されます）。`;
+          break;
+        }
+      }
+    }
+    warnings.push(`${small.map(r => `No.${r.no}`).join('、')} で取る量が ${MIN_PIPETTE_UL} µL 未満です。ピペットで正確に量りにくいので、${tip}`);
+  }
+  const short = rows.filter(r => r.short);
+  if (short.length) {
+    warnings.push(`${short.map(r => `No.${r.no}`).join('、')} は残る量が必要量（${volumeText(needL)}）より少なくなります。移す量を増やしてください。`);
+  }
+  if (volMode === 'fixed') {
+    const odd = rows.slice(1).filter(r => Math.abs(r.diluent / 1e-6 - Math.round(r.diluent / 1e-6 * 10) / 10) > 1e-6);
+    if (odd.length) warnings.push('溶媒の量がきりのいい数字になっていません。ハーフログなら「10・3・1・0.3…」を選ぶと、移す量 30 µL のとき溶媒は 70・60 µL の交互になります。');
+  }
+
+  // ベンチで読む手順
+  const procedure = [];
+  const dilList = rows.map(r => `No.${r.no}：${volumeText(r.diluent)}`).join('、');
+  procedure.push(`チューブを ${points}${blankRow ? '＋1（ブランク）' : ''} 本用意し、溶媒を入れる（${dilList}${blankRow ? `、ブランク：${volumeText(blankRow.diluent)}` : ''}）。`);
+  procedure.push(`No.1 に原液 ${volumeText(stockL)} を加えてよく混ぜる（全量 ${volumeText(total[0])}）。`);
+  for (let i = 0; i < points - 1; i++) {
+    procedure.push(`No.${i + 1} から ${volumeText(transfer[i])} を取り、No.${i + 2} に加えてよく混ぜる（全量 ${volumeText(total[i + 1])}）。`);
+  }
+  if (volMode !== 'equal') {
+    const kinds = [...new Set(keep.map(k => volumeText(k)))];
+    procedure.push(`各チューブに残る量：${kinds.length === 1 ? kinds[0] : rows.map(r => `No.${r.no} ${volumeText(r.keep)}`).join('、')}`);
+  } else {
+    procedure.push(`各チューブに ${volumeText(keepL)} ずつ残ります（必要量 ${volumeText(needL)}＋余裕分 ${formatFull(loss)}%）。`);
+  }
+
+  // 計算過程
+  const logLabel = isMolar ? 'log[M]' : `log10（${unitName} の値）`;
+  const steps = { inputs: [], conversions: [], formulas: [], results: [] };
+  steps.inputs.push(`原液の濃度 = ${q(f.c0.value, input.c0Unit)}`);
+  steps.inputs.push(`最高濃度（1点目） = ${q(f.cmax.value, unitName)}`);
+  steps.inputs.push(`希釈の方法 = ${MODE_LABELS[input.mode]}${input.mode === 'ratio' ? `（公比 ${formatFull(ratio)}）` : ''}`);
+  steps.inputs.push(`点数 = ${points}${blankRow ? '（＋ブランク）' : ''}`);
+  steps.inputs.push(`液量の決め方 = ${VOL_MODE_LABELS[volMode]}`);
+  if (volMode === 'fixed') steps.inputs.push(`移す量 = ${q(f.transfer.value, input.transferUnit)}${needL !== null ? `、必要量 = ${q(f.need.value, input.needUnit)}` : ''}`);
+  else if (volMode === 'auto') steps.inputs.push(`1点あたりの必要量 = ${q(f.need.value, input.needUnit)}`);
+  else steps.inputs.push(`1点あたりの必要量 = ${q(f.need.value, input.needUnit)}、余裕分 = ${formatFull(loss)}%`);
+
+  const baseUnit = isMolar ? 'mol/L' : 'g/L';
+  steps.conversions.push(`${q(f.c0.value, input.c0Unit)} = ${q(c0Base, baseUnit)}`);
+  steps.conversions.push(`${q(f.cmax.value, unitName)} = ${q(cmaxBase, baseUnit)}`);
+  if (volMode === 'fixed') steps.conversions.push(`${q(f.transfer.value, input.transferUnit)} = ${q(T, 'L')}`);
+  if (needL !== null) steps.conversions.push(`${q(f.need.value, input.needUnit)} = ${q(needL, 'L')}`);
+
+  if (input.mode === 'ratio') {
+    steps.formulas.push({ formula: '各点の濃度 = 最高濃度 ÷ 公比^(点の番号 − 1)', substituted: `= ${q(f.cmax.value, unitName)} ÷ ${formatFull(ratio)}^(n − 1)` });
+  } else if (input.mode === 'halflog') {
+    steps.formulas.push({ formula: '各点の濃度 = 最高濃度 × 10^(−0.5 × (点の番号 − 1))', substituted: `（隣の点との倍率は √10 = ${formatFull(Math.sqrt(10))} 倍）` });
+  } else {
+    steps.formulas.push({ formula: '各点の濃度 = 1 と 3 が交互に並ぶ値（10、3、1、0.3 …）', substituted: '（隣の点との倍率は 10/3 倍と 3 倍が交互）' });
+  }
+  rows.forEach(r => steps.formulas.push({ formula: `No.${r.no}`, substituted: `= ${q(r.conc, unitName)}（${logLabel} = ${formatFull(Number(r.log.toFixed(4)))}）` }));
+  steps.formulas.push(...fsteps);
+  steps.formulas.push({ formula: 'No.1 に入れる原液 = No.1 の全量 × 最高濃度 ÷ 原液の濃度', substituted: `= ${q(total[0], 'L')} × ${q(cmaxBase, baseUnit)} ÷ ${q(c0Base, baseUnit)} = ${q(stockL, 'L')}` });
+  steps.formulas.push({ formula: 'No.1 の溶媒 = 全量 − 原液', substituted: `= ${q(total[0], 'L')} − ${q(stockL, 'L')} = ${q(diluent[0], 'L')}` });
+  rows.forEach(r => steps.results.push(`No.${r.no}（${formatNumber(r.conc)} ${unitName}）：${r.from} ${volumeText(r.take)} ＋ 溶媒 ${volumeText(r.diluent)}`));
+
+  return {
+    ok: true, rows, blankRow, warnings, procedure, steps, unitName, logLabel,
+    summary: { candidates, stockL, keepL, needL, loss, points, mode: input.mode, ratio, volMode, transferL: T, c0: f.c0.value, c0Unit: input.c0Unit, keepTexts: [...new Set(keep.map(k => volumeText(k)))] },
+  };
+}
+
+// ===== CSV =====
+function csvCell(value) {
+  if (typeof value === 'number') return String(value);
+  let text = String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+function buildCsv(plan, memo, now) {
+  const s = plan.summary;
+  const rows = [
+    [`${TOOL_NAME} ${TOOL_VERSION}`],
+    ['作成日時', now],
+    ['メモ', memo],
+    ['原液の濃度', `${s.c0} ${s.c0Unit}`],
+    ['希釈の方法', MODE_LABELS[s.mode] + (s.mode === 'ratio' ? `（公比 ${s.ratio}）` : '')],
+    ['液量の決め方', VOL_MODE_LABELS[s.volMode] + (s.volMode !== 'equal' ? `（移す量 ${volumeText(s.transferL)}）` : '')],
+    ['各点に残る量', s.keepTexts.join(' / ')],
+    [],
+    ['No.', `濃度（${plan.unitName}）`, plan.logLabel, '前の液', '取る量（µL）', '溶媒（µL）', '全量（µL）', '次へ移す量（µL）', '残る量（µL）'],
+  ];
+  for (const r of plan.rows) {
+    rows.push([r.no, Number(r.conc.toPrecision(6)), Number(r.log.toFixed(4)), r.from, Number((r.take / 1e-6).toPrecision(6)), Number((r.diluent / 1e-6).toPrecision(6)), Number((r.total / 1e-6).toPrecision(6)), Number((r.transferOut / 1e-6).toPrecision(6)), Number((r.keep / 1e-6).toPrecision(6))]);
+  }
+  if (plan.blankRow) rows.push(['ブランク', 0, '', '', 0, Number((plan.blankRow.diluent / 1e-6).toPrecision(6)), Number((plan.blankRow.diluent / 1e-6).toPrecision(6)), 0, Number((plan.blankRow.diluent / 1e-6).toPrecision(6))]);
+  rows.push([], ['手順']);
+  plan.procedure.forEach((p, i) => rows.push([`${i + 1}. ${p}`]));
+  return '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
+if (typeof module !== 'undefined') module.exports = { planDilution, buildConcentrations, buildCsv, volumeText, chooseTransfer, niceLevel };
+
+// ===== 画面の操作 =====
+if (typeof document !== 'undefined') {
+  const $ = id => document.getElementById(id);
+  function el(tag, className, text) {
+    const e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  for (const select of document.querySelectorAll('select[data-units]')) {
+    const list = select.dataset.units === 'volume' ? VOLUME_UNITS : CONC_UNITS;
+    for (const name of Object.keys(list)) {
+      const option = new Option(name, name);
+      option.defaultSelected = name === select.dataset.default;
+      select.add(option);
+    }
+  }
+  $('footer-version').textContent = `${TOOL_NAME} ${TOOL_VERSION}`;
+
+  function syncMode() {
+    const mode = document.querySelector('input[name=mode]:checked').value;
+    $('ratio-field').hidden = mode !== 'ratio';
+    const vm = document.querySelector('input[name=volmode]:checked').value;
+    $('transfer-field').hidden = vm !== 'fixed';
+    $('loss-field').hidden = vm !== 'equal';
+    $('need-optional').textContent = vm === 'fixed' ? '（任意・入れると足りないときに警告）' : '';
+  }
+  document.querySelectorAll('input[name=volmode]').forEach(r => r.addEventListener('change', syncMode));
+  document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', syncMode));
+  syncMode();
+
+  function renderSteps(steps) {
+    const wrap = el('div', 'steps');
+    wrap.append(el('h3', null, '計算過程'));
+    const ol = el('ol');
+    const section = (title, items) => {
+      const li = el('li');
+      const ul = el('ul');
+      for (const item of items) ul.append(item);
+      li.append(el('strong', null, title), ul);
+      ol.append(li);
+    };
+    section('入力値', steps.inputs.map(t => el('li', null, t)));
+    section('単位換算', steps.conversions.map(t => el('li', null, t)));
+    section('計算式と代入', steps.formulas.map(s => {
+      const li = el('li');
+      li.append(el('div', 'formula', s.formula), el('div', 'substituted', s.substituted));
+      return li;
+    }));
+    section('結果（有効数字4桁に丸めた値）', steps.results.map(t => el('li', null, t)));
+    wrap.append(ol);
+    return wrap;
+  }
+
+  let lastPlan = null;
+  const box = $('result');
+  function show(plan) {
+    box.replaceChildren();
+    box.hidden = false;
+    lastPlan = plan.ok ? plan : null;
+    $('btn-csv').disabled = $('btn-print').disabled = !plan.ok;
+    if (!plan.ok) {
+      box.className = 'result error';
+      const list = el('ul');
+      plan.errors.forEach(m => list.append(el('li', null, m)));
+      box.append(el('h2', null, '入力を確認してください'), list);
+      return;
+    }
+    box.className = 'result ok';
+    const memo = $('memo').value.trim();
+    box.append(el('h2', null, `希釈の計画${memo ? '：' + memo : ''}`));
+    box.append(el('p', 'note', `原液 ${volumeText(plan.summary.stockL)} から ${plan.summary.points} 点を作ります。${plan.summary.volMode !== 'equal' ? `前の点から ${volumeText(plan.summary.transferL)} ずつ移します。` : ''}各点に残る量：${plan.summary.keepTexts.join(' / ')}`));
+    plan.warnings.forEach(w => box.append(el('p', 'warn', w)));
+
+    const wrap = el('div', 'table-wrap');
+    const table = el('table', 'out-table');
+    const head = el('tr');
+    ['No.', `濃度（${plan.unitName}）`, plan.logLabel, '前の液から取る量', '加える溶媒', '全量', '次へ移す量', '残る量'].forEach((h, i) => head.append(el('th', i ? 'num' : null, h)));
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    for (const r of plan.rows) {
+      const tr = el('tr', r.warn || r.short ? 'row-warn' : null);
+      [String(r.no), formatNumber(r.conc), Number(r.log.toFixed(3)).toFixed(3), `${r.from} ${volumeText(r.take)}`, volumeText(r.diluent), volumeText(r.total), r.transferOut ? volumeText(r.transferOut) : '—', volumeText(r.keep)]
+        .forEach((t, i) => tr.append(el('td', i ? 'num' : null, t)));
+      tbody.append(tr);
+    }
+    if (plan.blankRow) {
+      const tr = el('tr');
+      ['ブランク', '0', '—', '—', volumeText(plan.blankRow.diluent), volumeText(plan.blankRow.diluent), '—', volumeText(plan.blankRow.diluent)].forEach((t, i) => tr.append(el('td', i ? 'num' : null, t)));
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    wrap.append(table);
+    box.append(wrap);
+
+    if (plan.summary.candidates && plan.summary.candidates.length > 1) {
+      box.append(el('h3', null, 'ほかの作り方の候補'));
+      const ul = el('ul', 'procedure');
+      plan.summary.candidates.slice(0, 4).forEach((c, i) => {
+        const dils = [...new Set(c.diluentsUl.map(d => formatNumber(d)))].join('・');
+        ul.append(el('li', null, `${i === 0 ? '【採用】' : ''}${c.transferUl} µL ずつ移す → 溶媒 ${dils} µL、余る量 平均 ${Math.round(c.waste)}%`));
+      });
+      box.append(ul);
+    }
+    box.append(el('h3', null, '手順'));
+    const ol = el('ol', 'procedure');
+    plan.procedure.forEach(p => ol.append(el('li', null, p)));
+    box.append(ol);
+    box.append(renderSteps(plan.steps));
+  }
+
+  $('form').addEventListener('submit', e => {
+    e.preventDefault();
+    show(planDilution({
+      c0: $('c0').value, c0Unit: $('c0-unit').value,
+      cmax: $('cmax').value, cmaxUnit: $('cmax-unit').value,
+      mode: document.querySelector('input[name=mode]:checked').value,
+      ratio: $('ratio').value, points: $('points').value,
+      need: $('need').value, needUnit: $('need-unit').value,
+      loss: $('loss').value, blank: $('blank').checked,
+      volMode: document.querySelector('input[name=volmode]:checked').value,
+      transfer: $('transfer').value, transferUnit: $('transfer-unit').value,
+    }));
+  });
+  $('btn-clear').addEventListener('click', () => {
+    $('form').reset();
+    syncMode();
+    box.hidden = true;
+    box.replaceChildren();
+    $('btn-csv').disabled = $('btn-print').disabled = true;
+  });
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = d => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const dateText = d => `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  $('btn-csv').addEventListener('click', () => {
+    if (!lastPlan) return;
+    const now = new Date();
+    const blob = new Blob([buildCsv(lastPlan, $('memo').value.trim(), dateText(now))], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a');
+    a.href = url;
+    a.download = `段階希釈_${stamp(now)}.csv`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  $('btn-print').addEventListener('click', () => {
+    $('print-time').textContent = `作成日時：${dateText(new Date())}`;
+    window.print();
+  });
+}
+
+</script>
+</body>
+</html>
